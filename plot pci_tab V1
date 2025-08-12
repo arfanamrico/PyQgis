@@ -1,0 +1,101 @@
+import os
+import pandas as pd
+from qgis.core import (
+    QgsVectorLayer,
+    QgsProject,
+    QgsSymbol,
+    QgsRendererCategory,
+    QgsCategorizedSymbolRenderer,
+    QgsTextFormat,
+    QgsTextBufferSettings,
+    QgsPalLayerSettings,
+    QgsVectorLayerSimpleLabeling
+)
+from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtCore import Qt
+
+# Path
+folder_path = r"C:\Users\Lenovo\Documents\Logfile\13DPK0302\tab"
+csv_path = os.path.join(folder_path, "kodewarna.csv")
+
+# Load warna dari CSV (kolom PCI dan kodewarna)
+df_warna = pd.read_csv(csv_path)
+color_map = dict(zip(df_warna['PCI'], df_warna['kodewarna']))
+
+# Cari file .tab
+tab_files = [f for f in os.listdir(folder_path) if f.endswith(".tab")]
+
+for tab_file in tab_files:
+    file_path = os.path.join(folder_path, tab_file)
+    layer_name = os.path.splitext(tab_file)[0]
+
+    layer = QgsVectorLayer(file_path, layer_name, "ogr")
+    if not layer.isValid():
+        print(f"Gagal memuat layer: {tab_file}")
+        continue
+
+    QgsProject.instance().addMapLayer(layer)
+
+    # Buat kategori berdasarkan color_map
+    categories = []
+    for pci_value, color in color_map.items():
+        # Sesuaikan tipe key agar cocok dengan tipe field "Value" di layer
+        key = pci_value
+        try:
+            # coba konversi ke float, lalu ke int bila memang integer-like
+            f = float(pci_value)
+            if f.is_integer():
+                key = int(f)
+            else:
+                key = f
+        except Exception:
+            key = str(pci_value)
+
+        symbol = QgsSymbol.defaultSymbol(layer.geometryType())
+        if symbol is None:
+            symbol = QgsSymbol.defaultSymbol(0)  # fallback (jarang diperlukan)
+        symbol.setColor(QColor(color))
+        symbol.symbolLayer(0).setStrokeStyle(Qt.NoPen)
+
+        # label legend: tampilkan PCI sebagai integer bila memungkinkan
+        try:
+            legend_label = str(int(float(pci_value)))
+        except Exception:
+            legend_label = str(pci_value)
+
+        category = QgsRendererCategory(key, symbol, legend_label)
+        categories.append(category)
+
+    # kategori default untuk nilai lain
+    symbol_default = QgsSymbol.defaultSymbol(layer.geometryType())
+    symbol_default.setColor(QColor('black'))
+    symbol_default.symbolLayer(0).setStrokeStyle(Qt.NoPen)
+    categories.append(QgsRendererCategory(None, symbol_default, "Lainnya"))
+
+    # Pasang renderer ke kolom "Value"
+    renderer = QgsCategorizedSymbolRenderer("Value", categories)
+    layer.setRenderer(renderer)
+    layer.triggerRepaint()
+
+    # --- Label PCI di peta (tanpa desimal) ---
+    pal = QgsPalLayerSettings()
+    pal.isExpression = True
+    # format_number("Value", 0) -> membulatkan/format ke 0 desimal (hasil string)
+    pal.fieldName = 'format_number("Value", 0)'
+
+    # Format teks & buffer
+    text_format = QgsTextFormat()
+    text_format.setFont(QFont("Arial", 9))
+    text_format.setSize(9)
+    text_format.setColor(QColor("black"))
+
+
+    pal.setFormat(text_format)
+
+    # NOTE: tidak meng-set pal.placement (agar tidak terjadi enum error)
+    labeling = QgsVectorLayerSimpleLabeling(pal)
+    layer.setLabelsEnabled(True)
+    layer.setLabeling(labeling)
+    layer.triggerRepaint()
+
+    print(f"Layer {layer_name} berhasil diproses dan ditampilkan.")
