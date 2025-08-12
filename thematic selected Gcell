@@ -1,0 +1,61 @@
+from qgis.core import (
+    QgsProject,
+    QgsCategorizedSymbolRenderer,
+    QgsRendererCategory,
+    QgsSymbol
+)
+from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt
+
+# Nama layer
+layer_name = "Gcell"
+
+# Ambil layer
+layer = QgsProject.instance().mapLayersByName(layer_name)[0]
+
+# Kolom warna dan kolom label
+color_column = 'kodewarna'
+label_column = 'PCI'
+
+# Ambil fitur dari layer
+features = layer.getFeatures()
+
+# Buat mapping warna -> set PCI (integer)
+color_to_pcis = {}
+
+for f in features:
+    warna = f[color_column]
+    pci_raw = f[label_column]
+    
+    try:
+        pci_int = str(int(float(pci_raw)))  # konversi ke int lalu ke str
+    except:
+        pci_int = str(pci_raw)  # fallback jika tidak bisa dikonversi
+    
+    if warna not in color_to_pcis:
+        color_to_pcis[warna] = set()
+    color_to_pcis[warna].add(pci_int)
+
+# Buat kategori renderer berdasarkan warna dan PCI
+categories = []
+
+for warna, pci_set in color_to_pcis.items():
+    label_pci = ", ".join(sorted(pci_set))  # gabungan PCI sebagai string
+    symbol = QgsSymbol.defaultSymbol(layer.geometryType())
+    symbol.setColor(QColor(warna))
+    # Tambahkan garis tepi (stroke)
+    symbol.symbolLayer(0).setStrokeColor(QColor("black"))  # Warna garis
+    symbol.symbolLayer(0).setStrokeWidth(0.2)              # Ketebalan garis
+
+    category = QgsRendererCategory(warna, symbol, f"{label_pci}")
+    categories.append(category)
+
+# Pasang renderer ke layer
+renderer = QgsCategorizedSymbolRenderer(color_column, categories)
+layer.setRenderer(renderer)
+
+# Nonaktifkan label di peta
+layer.setLabelsEnabled(False)
+
+# Terapkan perubahan
+layer.triggerRepaint()
