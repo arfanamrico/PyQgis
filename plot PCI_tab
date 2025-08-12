@@ -1,0 +1,61 @@
+import os
+import pandas as pd
+from qgis.core import (
+    QgsVectorLayer,
+    QgsProject,
+    QgsSymbol,
+    QgsRendererCategory,
+    QgsCategorizedSymbolRenderer
+)
+from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt
+
+# Path ke folder .tab dan file CSV warna
+folder_path = r"C:\Users\Lenovo\Documents\Logfile\13DPK0302\tab"
+csv_path = f"{folder_path}\kodewarna.csv"  # Ganti sesuai lokasi file CSV
+
+# Load file CSV yang berisi PCI dan warna
+df_warna = pd.read_csv(csv_path)
+
+# Ubah ke dictionary: {pci: hex_color}
+color_map = dict(zip(df_warna['PCI'], df_warna['kodewarna']))
+
+# Dapatkan semua file .tab dalam folder
+tab_files = [f for f in os.listdir(folder_path) if f.endswith(".tab")]
+
+for tab_file in tab_files:
+    file_path = os.path.join(folder_path, tab_file)
+    layer_name = os.path.splitext(tab_file)[0]
+
+    # Load layer
+    layer = QgsVectorLayer(file_path, layer_name, "ogr")
+    if not layer.isValid():
+        print(f"Gagal memuat layer: {tab_file}")
+        continue
+
+    QgsProject.instance().addMapLayer(layer)
+
+    # Buat kategori simbol berdasarkan PCI
+    categories = []
+
+    for pci_value, color in color_map.items():
+        symbol = QgsSymbol.defaultSymbol(layer.geometryType())
+        symbol.setColor(QColor(color))  # Pakai kode hex dari CSV
+        symbol.symbolLayer(0).setStrokeStyle(Qt.NoPen)
+        category = QgsRendererCategory(pci_value, symbol, f"{pci_value}")
+        categories.append(category)
+
+    # Simbol default untuk PCI lainnya (warna hitam)
+    symbol_default = QgsSymbol.defaultSymbol(layer.geometryType())
+    symbol_default.setColor(QColor('black'))
+    symbol_default.symbolLayer(0).setStrokeStyle(Qt.NoPen)
+    category_default = QgsRendererCategory(None, symbol_default, "Lainnya")
+    categories.append(category_default)
+
+    # Terapkan renderer ke kolom "Value"
+    renderer = QgsCategorizedSymbolRenderer("Value", categories)
+    if renderer is not None:
+        layer.setRenderer(renderer)
+        layer.triggerRepaint()
+
+    print(f"Layer {layer_name} berhasil diproses dan ditampilkan.")
