@@ -1,0 +1,79 @@
+from qgis.core import (
+    QgsProject,
+    QgsCategorizedSymbolRenderer,
+    QgsRendererCategory,
+    QgsSymbol,
+    QgsVectorLayer,
+    QgsWkbTypes
+)
+from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt
+
+# Nama layer sumber
+layer_name = "Gcell"
+siteid_target = "13DPK0302"  # Ganti sesuai site yang ingin diproses
+
+# Ambil layer
+layer = QgsProject.instance().mapLayersByName(layer_name)[0]
+
+# Filter fitur berdasarkan siteid
+features = [f for f in layer.getFeatures() if f['SITE_ID'] == siteid_target]
+
+# Ambil info geometri dan CRS
+geometry_wkb = layer.wkbType()
+geometry_str = QgsWkbTypes.displayString(geometry_wkb)
+crs = layer.crs().authid()
+
+# Buat layer baru memory
+new_layer = QgsVectorLayer(f"{geometry_str}?crs={crs}", f"{siteid_target}_Gcell", "memory")
+new_layer_data = new_layer.dataProvider()
+new_layer_data.addAttributes(layer.fields())
+new_layer.updateFields()
+
+# Tambahkan fitur ke layer baru
+new_layer_data.addFeatures(features)
+new_layer.updateExtents()
+QgsProject.instance().addMapLayer(new_layer)
+
+# Buat renderer berdasarkan kodewarna dan label PCI
+color_column = 'kodewarna'
+label_column = 'PCI'
+
+# Mapping warna -> PCI
+color_to_pcis = {}
+
+for f in features:
+    warna = f[color_column]
+    pci_raw = f[label_column]
+    try:
+        pci_int = str(int(float(pci_raw)))
+    except:
+        pci_int = str(pci_raw)
+    if warna not in color_to_pcis:
+        color_to_pcis[warna] = set()
+    color_to_pcis[warna].add(pci_int)
+
+# Buat kategori renderer
+categories = []
+
+for warna, pci_set in color_to_pcis.items():
+    label_pci = ", ".join(sorted(pci_set))
+    symbol = QgsSymbol.defaultSymbol(new_layer.geometryType())
+    if symbol is None:
+        raise Exception("Gagal menentukan simbol untuk geometry type.")
+
+    # Atur warna simbol
+    symbol.setColor(QColor(warna))
+
+    # Tambahkan garis tepi (stroke)
+    symbol.symbolLayer(0).setStrokeColor(QColor("black"))  # Warna garis
+    symbol.symbolLayer(0).setStrokeWidth(0.2)              # Ketebalan garis
+
+    category = QgsRendererCategory(warna, symbol, f"{label_pci}")
+    categories.append(category)
+
+# Pasang renderer ke layer
+renderer = QgsCategorizedSymbolRenderer(color_column, categories)
+new_layer.setRenderer(renderer)
+new_layer.setLabelsEnabled(False)
+new_layer.triggerRepaint()
