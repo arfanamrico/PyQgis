@@ -1,0 +1,14 @@
+import pandas as pd
+
+site = ['11TGR0321','11TGR0324','11TGR0337','11TGR0339','11TGR0350','11TGR0351']
+gcell = r"C:\Users\Lenovo\Documents\Gcell 20250722\4G_Gcell_test.csv"
+simpan = r"C:\Users\Lenovo\Documents\Logfile\VIP COMPLAIN\tab"
+namafile = 'kodewarna.csv'
+df = pd.read_csv(gcell)
+df = pd.DataFrame(df)
+dfkode = df[['SITE_ID','PCI','sector_group','kategori','legend','kodewarna']]
+kode = dfkode[dfkode['SITE_ID'].isin(site)]
+kode.drop_duplicates(subset='PCI',keep='first',inplace=True)
+kode = kode.sort_values(by=['sector_group', 'kategori']).reset_index()
+kode.to_csv(f'{simpan}/{namafile}', index=False)
+print(kode)
