@@ -1,0 +1,209 @@
+import os
+import random
+import pandas as pd
+from qgis.core import (
+    QgsVectorLayer,
+    QgsProject,
+    QgsSymbol,
+    QgsRendererCategory,
+    QgsCategorizedSymbolRenderer,
+    QgsTextFormat,
+    QgsPalLayerSettings,
+    QgsVectorLayerSimpleLabeling
+)
+from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtCore import Qt
+
+# --- Konfigurasi Path ---
+folder_path = r"C:\Users\Lenovo\Documents\Logfile\12JKT0444\12JKT0444\tab"
+
+# --- Load warna PCI ---
+csv_pci_path = os.path.join(folder_path, "kodewarna.csv")
+df_pci = pd.read_csv(csv_pci_path)
+
+# --- Load warna GSM (CI) ---
+csv_ci_path = os.path.join(folder_path, "2Gkodewarna.csv")
+df_ci = pd.read_csv(csv_ci_path)
+
+# --- Normalisasi Key ---
+def normalize_key(v):
+    try:
+        f = float(v)
+        if f.is_integer():
+            return str(int(f))
+        else:
+            return str(f)
+    except Exception:
+        return str(v)
+
+# Mapping warna PCI & CI
+pci_color_map = {normalize_key(pci): kodewarna for pci, kodewarna in zip(df_pci['PCI'], df_pci['kodewarna'])}
+ci_color_map  = {normalize_key(ci): kodewarna for ci, kodewarna in zip(df_ci['CI'], df_ci['kodewarna'])}
+
+# Gabungkan hue warna referensi
+csv_hues = []
+for w in list(pci_color_map.values()) + list(ci_color_map.values()):
+    qc = QColor(w)
+    h, s, v, _ = qc.getHsv()
+    if h >= 0:
+        csv_hues.append(h)
+
+# --- Fungsi utilitas warna ---
+def far_enough(hue, used_hues, min_diff=30):
+    return all(abs(hue - uh) >= min_diff and abs(hue - uh) <= 360 - min_diff for uh in used_hues)
+
+def random_color():
+    for _ in range(100):
+        hue = random.randint(0, 359)
+        if far_enough(hue, csv_hues, min_diff=30):
+            return QColor.fromHsv(hue, 180, 230)
+    return QColor.fromHsv(random.randint(0, 359), 180, 230)
+
+# --- Global Storage supaya warna random konsisten antar layer ---
+global_random_colors = {}
+
+# =====================================================================
+# 1. PROSES FILE TAB (LTE PCI)
+# =====================================================================
+tab_files = [f for f in os.listdir(folder_path) if f.endswith(".tab")]
+
+for tab_file in tab_files:
+    file_path = os.path.join(folder_path, tab_file)
+
+    base_name = os.path.splitext(tab_file)[0]
+    tokens = base_name.split()
+    if len(tokens) >= 2:
+        layer_name = f"{tokens[0]} {tokens[1]}_PCI"
+    else:
+        layer_name = base_name
+
+    layer = QgsVectorLayer(file_path, layer_name, "ogr")
+    if not layer.isValid():
+        print(f"Gagal memuat layer: {tab_file}")
+        continue
+
+    QgsProject.instance().addMapLayer(layer)
+
+    if "Value" not in [f.name() for f in layer.fields()]:
+        print(f"⚠ Layer {layer_name} tidak punya kolom 'Value'")
+        continue
+
+    unique_pci = layer.uniqueValues(layer.fields().indexFromName("Value"))
+    categories = []
+
+    for pci_value in unique_pci:
+        key = normalize_key(pci_value)
+
+        if key in pci_color_map:
+            qcolor = QColor(pci_color_map[key])
+        else:
+            if key not in global_random_colors:
+                global_random_colors[key] = random_color()
+            qcolor = global_random_colors[key]
+
+        symbol = QgsSymbol.defaultSymbol(layer.geometryType())
+        if symbol is None:
+            symbol = QgsSymbol.defaultSymbol(0)
+        symbol.setColor(qcolor)
+        symbol.symbolLayer(0).setStrokeStyle(Qt.NoPen)
+
+        category = QgsRendererCategory(pci_value, symbol, key)
+        categories.append(category)
+
+    renderer = QgsCategorizedSymbolRenderer("Value", categories)
+    layer.setRenderer(renderer)
+    layer.triggerRepaint()
+
+    # Label PCI
+    pal = QgsPalLayerSettings()
+    pal.isExpression = True
+    pal.fieldName = 'format_number("Value", 0)'
+
+    text_format = QgsTextFormat()
+    text_format.setFont(QFont("Arial", 9))
+    text_format.setSize(9)
+    text_format.setColor(QColor("black"))
+
+    pal.setFormat(text_format)
+    labeling = QgsVectorLayerSimpleLabeling(pal)
+    layer.setLabelsEnabled(True)
+    layer.setLabeling(labeling)
+    layer.triggerRepaint()
+
+    print(f"Layer {layer_name} berhasil diproses dan ditampilkan.")
+
+# =====================================================================
+# 2. PROSES FILE CSV (GSM BCCH/CI)
+# =====================================================================
+bcch_files = [f for f in os.listdir(folder_path) if f.endswith(".csv") and f.lower() not in ["kodewarna.csv","2gkodewarna.csv"]]
+
+for bcch_file in bcch_files:
+    bcch_path = os.path.join(folder_path, bcch_file)
+    df_bcch = pd.read_csv(bcch_path)
+
+    if "Longitude" in df_bcch.columns and "Latitude" in df_bcch.columns:
+        uri = f"file:///{bcch_path}?delimiter=,&xField=Longitude&yField=Latitude&crs=EPSG:4326"
+        layer_bcch = QgsVectorLayer(uri, os.path.splitext(bcch_file)[0], "delimitedtext")
+    else:
+        layer_bcch = QgsVectorLayer(bcch_path, os.path.splitext(bcch_file)[0], "ogr")
+
+    if not layer_bcch.isValid():
+        print(f"Gagal memuat layer {bcch_file}")
+        continue
+
+    QgsProject.instance().addMapLayer(layer_bcch)
+
+    # Cari kolom CI
+    colnames = [c.name() for c in layer_bcch.fields()]
+    ci_col = None
+    for c in colnames:
+        if c.lower() in ["ci", "gsm cell id"]:
+            ci_col = c
+            break
+    if not ci_col:
+        print(f"⚠ Tidak ada kolom 'CI' atau 'gsm cell id' di file {bcch_file}, dilewati.")
+        continue
+
+    unique_ci = layer_bcch.uniqueValues(layer_bcch.fields().indexFromName(ci_col))
+    categories = []
+
+    for ci_value in unique_ci:
+        key = normalize_key(ci_value)
+
+        if key in ci_color_map:
+            qcolor = QColor(ci_color_map[key])
+        else:
+            if key not in global_random_colors:
+                global_random_colors[key] = random_color()
+            qcolor = global_random_colors[key]
+
+        symbol = QgsSymbol.defaultSymbol(layer_bcch.geometryType())
+        if symbol is None:
+            symbol = QgsSymbol.defaultSymbol(0)
+        symbol.setColor(qcolor)
+        symbol.symbolLayer(0).setStrokeStyle(Qt.NoPen)
+
+        category = QgsRendererCategory(ci_value, symbol, key)
+        categories.append(category)
+
+    renderer = QgsCategorizedSymbolRenderer(ci_col, categories)
+    layer_bcch.setRenderer(renderer)
+    layer_bcch.triggerRepaint()
+
+    # Label CI
+    pal = QgsPalLayerSettings()
+    pal.isExpression = True
+    pal.fieldName = f'format_number("{ci_col}", 0)'
+
+    text_format = QgsTextFormat()
+    text_format.setFont(QFont("Arial", 9))
+    text_format.setSize(9)
+    text_format.setColor(QColor("black"))
+
+    pal.setFormat(text_format)
+    labeling = QgsVectorLayerSimpleLabeling(pal)
+    layer_bcch.setLabelsEnabled(True)
+    layer_bcch.setLabeling(labeling)
+    layer_bcch.triggerRepaint()
+
+    print(f"Layer {bcch_file} berhasil diproses dan ditampilkan.")
