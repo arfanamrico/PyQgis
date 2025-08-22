@@ -1,0 +1,104 @@
+import os
+import random
+from qgis.core import (
+    QgsVectorLayer,
+    QgsProject,
+    QgsSymbol,
+    QgsRendererCategory,
+    QgsCategorizedSymbolRenderer,
+    QgsTextFormat,
+    QgsTextBufferSettings,
+    QgsPalLayerSettings,
+    QgsVectorLayerSimpleLabeling
+)
+from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtCore import Qt
+
+# ==== PATH FILE TAB ====
+tab_path = r"C:\Users\Lenovo\Documents\Logfile\12JKT0037\CF_12JKT0037\tabL18"   # ganti sesuai lokasi file Anda
+
+# ==== LOAD LAYER TAB ====
+tab_layer = QgsVectorLayer(tab_path, "DriveTest", "ogr")
+if not tab_layer.isValid():
+    raise Exception("Layer .tab tidak valid!")
+
+# ==== LOAD LAYER GCELL DARI PROJECT ====
+gcell_layer = None
+for layer in QgsProject.instance().mapLayers().values():
+    if layer.name() == "Gcell":   # sesuaikan dengan nama layer Anda di QGIS
+        gcell_layer = layer
+        break
+
+if gcell_layer is None:
+    raise Exception("Layer Gcell tidak ditemukan di QGIS!")
+
+# ==== AMBIL UNIQUE PCI DARI FILE .TAB ====
+idx_value = tab_layer.fields().indexFromName("Value")
+if idx_value == -1:
+    raise Exception("Kolom 'Value' tidak ditemukan di layer .tab!")
+unique_pci = tab_layer.uniqueValues(idx_value)
+
+# ==== BUAT WARNA UNTUK TIAP PCI ====
+pci_colors = {}
+for pci in unique_pci:
+    color = QColor.fromRgb(
+        random.randint(0, 255),
+        random.randint(0, 255),
+        random.randint(0, 255)
+    )
+    pci_colors[pci] = color
+
+# ==== FUNGSI MEMBUAT RENDERER ====
+def make_renderer(layer, fieldname, pci_colors, no_stroke=False):
+    categories = []
+    for pci, color in pci_colors.items():
+        symbol = QgsSymbol.defaultSymbol(layer.geometryType())
+        symbol.setColor(color)
+        # Hilangkan border jika diminta (untuk .tab)
+        if no_stroke and symbol.symbolLayerCount() > 0:
+            symbol.symbolLayer(0).setStrokeStyle(Qt.NoPen)
+        category = QgsRendererCategory(pci, symbol, str(pci))
+        categories.append(category)
+    renderer = QgsCategorizedSymbolRenderer(fieldname, categories)
+    return renderer
+
+# ==== TERAPKAN RENDERER ====
+# tab_layer: tanpa stroke
+tab_layer.setRenderer(make_renderer(tab_layer, "Value", pci_colors, no_stroke=True))
+
+# gcell_layer: tetap ada stroke
+# pastikan kolom 'PCI' ada
+if gcell_layer.fields().indexFromName("PCI") == -1:
+    raise Exception("Kolom 'PCI' tidak ditemukan di layer Gcell!")
+gcell_layer.setRenderer(make_renderer(gcell_layer, "PCI", pci_colors, no_stroke=False))
+
+# ==== LABELING UNTUK TAB_LAYER (menampilkan PCI dari kolom Value) ====
+label_settings = QgsPalLayerSettings()
+label_settings.fieldName = "Value"  # kolom PCI dari file .tab
+
+# Format teks label
+text_format = QgsTextFormat()
+text_format.setFont(QFont("Arial", 9))
+text_format.setSize(9)
+text_format.setColor(QColor("black"))
+
+
+
+label_settings.setFormat(text_format)
+
+# ⚠️ Jangan set placement paksa untuk menghindari error enum
+# (default untuk point adalah "Over point")
+# Jika ingin tetap coba set, gunakan blok try-except aman seperti ini:
+# try:
+#     label_settings.placement = QgsPalLayerSettings.OverPoint
+# except Exception:
+#     pass  # fallback ke default
+
+labeling = QgsVectorLayerSimpleLabeling(label_settings)
+tab_layer.setLabelsEnabled(True)
+tab_layer.setLabeling(labeling)
+
+# ==== TAMBAHKAN LAYER TAB KE PROJECT (jika belum ada) ====
+QgsProject.instance().addMapLayer(tab_layer)
+
+print("✅ Selesai! .tab diplot tanpa stroke, warna per-PCI sinkron dengan Gcell, dan label PCI tampil di map.")
